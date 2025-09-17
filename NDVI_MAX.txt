@@ -1,0 +1,156 @@
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//CÓDIGO: NDVI MÁXIMO ANUAL DE UNA SERIE DE AÑOS Y EXPORTAR GRANDES SUPERFICIES
+//Autor: Cristina Acosta Muñoz
+//Fecha: 20250401
+//DESCRIPCIÓN:
+// * Este script calcula el NDVI máximo anual en la región de Andalucía desde 1984 hasta 2024 
+//   utilizando imágenes Landsat 5, 7, 8 y 9 de la colección C02/T1_L2.
+// * Aplica una máscara para nubes, sombras y nieve (y cirros, cuando procede).
+// * Centra y recorta los resultados al área de estudio. 
+// * Exporta los NDVI anuales como archivos GeoTIFF a Drive.
+// * Visualiza en el mapa el NDVI máximo para un año específico con una leyenda de 10 categorías.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 1. Cargar el archivo y centrar el mapa
+var geometry = ee.FeatureCollection('projects/ee-my-jraul/assets/calculo_NDVI/mapa_andalucia');
+Map.centerObject(geometry);
+
+// 2. Máscara para Landsat 5 y 7 incluyendo nieve
+function maskL57(image) {
+  var qa = image.select('QA_PIXEL');
+  var cloudShadowBitMask = (1 << 4);
+  var cloudsBitMask = (1 << 3);
+  var snowBitMask = (1 << 5);
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+               .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+               .and(qa.bitwiseAnd(snowBitMask).eq(0));
+  return image.updateMask(mask);
+}
+
+// 3. Máscara para Landsat 8 y 9 incluyendo nieve
+function maskL89(image) {
+  var qa = image.select('QA_PIXEL');
+  var cirrusBitMask = (1 << 2);
+  var cloudsBitMask = (1 << 3);
+  var cloudShadowBitMask = (1 << 4);
+  var snowBitMask = (1 << 5);
+  var mask = qa.bitwiseAnd(cirrusBitMask).eq(0)
+               .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+               .and(qa.bitwiseAnd(cloudShadowBitMask).eq(0))
+               .and(qa.bitwiseAnd(snowBitMask).eq(0));
+  return image.updateMask(mask);
+}
+
+// 4. Aplicar escala a bandas ópticas Landsat 8/9
+function applyScaleFactors(image) {
+  // Escalar bandas ópticas (SR_B1 a SR_B7 según disponibilidad)
+  var opticalBands = image.select('SR_B.') // Wildcard que captura todas las bandas SR_B*
+    .multiply(0.0000275)  // Factor de escala Landsat C2
+    .add(-0.2);           // Offset Landsat C2
+
+  // Reemplazar bandas originales con las escaladas
+  return image.addBands(opticalBands, null, true);
+}
+
+// 5. Función de procesamiento anual
+function processYear(year) {
+  var startDate = ee.Date.fromYMD(year, 1, 1);
+  var endDate = ee.Date.fromYMD(year, 12, 31);
+
+  var l5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
+    .filterDate(startDate, endDate)
+    .filterBounds(geometry)
+    .map(maskL57)
+    .map(applyScaleFactors)
+    .map(function(image) {
+      return image.normalizedDifference(['SR_B4', 'SR_B3']).rename('NDVI').clip(geometry);
+    });
+
+   var l7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .filterDate(startDate, endDate)
+    .filterBounds(geometry)
+    .map(maskL57)
+    .map(applyScaleFactors)  
+    .map(function(image) {
+      return image.normalizedDifference(['SR_B4', 'SR_B3']).rename('NDVI').clip(geometry);
+    });
+
+  var l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+    .filterDate(startDate, endDate)
+    .filterBounds(geometry)
+    .map(maskL89)
+    .map(applyScaleFactors)
+    .map(function(image) {
+      return image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI').clip(geometry);
+    });
+
+  var l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')
+    .filterDate(startDate, endDate)
+    .filterBounds(geometry)
+    .map(maskL89)
+    .map(applyScaleFactors)
+    .map(function(image) {
+      return image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI').clip(geometry);
+    });
+
+  var merged = l5.merge(l7).merge(l8).merge(l9);
+  var maxNDVI = merged.reduce(ee.Reducer.max());
+
+// 6. Exportar resultados
+  Export.image.toDrive({
+    image: maxNDVI,
+    description: 'NDVI_Max_' + year,
+    folder: 'NDVI',
+    fileNamePrefix: 'NDVI_Max_' + year,
+    region: geometry.geometry(),
+    scale: 30,
+    crs: 'EPSG:32630',
+    maxPixels: 1e13,
+    fileFormat: 'GeoTIFF'
+  });
+
+  return maxNDVI.set('year', year);
+}
+
+// 7. Visualización y exportación del NDVI para un año específico
+var year = 2020; // Año para visualizar en el mapa
+var ndviImage = processYear(year);
+
+Map.addLayer(ndviImage, {
+  min: 0, max: 1,
+  palette: ['#cb181d', '#fcbba1', '#f7fcfd', '#ccece6', '#99d8c9',
+            '#66c2a4', '#41ae76', '#238b45', '#006d2c', '#00441b']
+}, 'NDVI Máximo ' + year);
+
+Map.addLayer(geometry, {}, 'Andalucía');
+
+// 8. Añadir leyenda
+var legend = ui.Panel({style: {position: 'bottom-left', padding: '8px 15px'}});
+legend.add(ui.Label({
+  value: 'NDVI Máximo ' + year,
+  style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 4px 0'}
+}));
+
+var palette = ['#cb181d', '#fcbba1', '#f7fcfd', '#ccece6', '#99d8c9',
+               '#66c2a4', '#41ae76', '#238b45', '#006d2c', '#00441b'];
+var labels = ['0.0–0.1','0.1–0.2','0.2–0.3','0.3–0.4','0.4–0.5',
+              '0.5–0.6','0.6–0.7','0.7–0.8','0.8–0.9','0.9–1.0'];
+
+for (var i = 0; i < 10; i++) {
+  legend.add(ui.Panel({
+    widgets: [
+      ui.Label({style: {backgroundColor: palette[i], padding: '8px', margin: '0'}}),
+      ui.Label({value: labels[i], style: {margin: '0 0 0 6px'}})
+    ],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  }));
+}
+Map.add(legend);
+
+// 9. Ejecutar loop para exportar NDVI de todos los años 1984–2024
+var years = ee.List.sequence(1984, 2024);
+years.evaluate(function(list) {
+  list.forEach(function(y) {
+    processYear(y);
+  });
+});

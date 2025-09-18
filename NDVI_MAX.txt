@@ -1,6 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //CÓDIGO: NDVI MÁXIMO ANUAL DE UNA SERIE DE AÑOS Y EXPORTAR GRANDES SUPERFICIES
 //Autor: Cristina Acosta Muñoz
+//Editado por: José Raúl Raya Castillo
 //Fecha: 20250401
 //DESCRIPCIÓN:
 // * Este script calcula el NDVI máximo anual en la región de Andalucía desde 1984 hasta 2024 
@@ -153,4 +154,5 @@ years.evaluate(function(list) {
   list.forEach(function(y) {
     processYear(y);
   });
+
 });
